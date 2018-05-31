@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	SnapshotLen int32 = 68
-	Promiscuous bool  = true
+	snapshotLen int32 = 68
+	promiscuous bool  = true
 )
 
-type Options struct {
+type options struct {
 	IFace     string `short:"I" long:"iface" description:"Interface name" required:"true"`
 	DstEoEMAC string `long:"eoe-da" description:"EoE destination address" default:"0F:0E:CC:00:00:FE"`
 	SrcEoEMAC string `long:"eoe-sa" description:"EoE source address" default:"0E:30:00:00:00:00"`
@@ -47,7 +47,7 @@ func newEthernet(dstMAC, srcMAC string, layerType uint16) *layers.Ethernet {
 }
 
 func main() {
-	opts := &Options{}
+	opts := &options{}
 	if _, err := flags.Parse(opts); err != nil {
 		os.Exit(1)
 	}
@@ -64,7 +64,7 @@ func main() {
 		gopacket.Payload(nil),
 	)
 
-	handle, err := pcap.OpenLive(opts.IFace, SnapshotLen, Promiscuous, pcap.BlockForever)
+	handle, err := pcap.OpenLive(opts.IFace, snapshotLen, promiscuous, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}

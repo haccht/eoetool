@@ -18,12 +18,12 @@ import (
 )
 
 const (
-	ProgramName string = "EoEPing by t.hachimura@ntt.com"
-	SnapshotLen int32  = 68
-	Promiscuous bool   = true
+	programName string = "EoEPing by haccht"
+	snapshotLen int32  = 68
+	promiscuous bool   = true
 )
 
-type Options struct {
+type options struct {
 	IFace     string `short:"I" long:"iface" description:"Interface name to send requests" required:"true"`
 	Timeout   int    `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"3"`
 	Interval  int    `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"1000"`
@@ -35,7 +35,7 @@ type Options struct {
 	EoEEID    uint   `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
 }
 
-func buildRequest(msg, seq uint16, opts *Options) ([]byte, error) {
+func buildRequest(msg, seq uint16, opts *options) ([]byte, error) {
 	dstMAC, err := net.ParseMAC(opts.EoEDstMAC)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func buildRequest(msg, seq uint16, opts *Options) ([]byte, error) {
 			MessageID:  uint16(msg),
 			Sequence:   uint16(seq),
 			ReplyID:    layers.EthernetBroadcast,
-			ChassisID:  ProgramName,
+			ChassisID:  programName,
 		},
 	)
 
@@ -86,12 +86,12 @@ func init() {
 }
 
 func main() {
-	opts := &Options{}
+	opts := &options{}
 	if _, err := flags.Parse(opts); err != nil {
 		os.Exit(1)
 	}
 
-	handle, err := pcap.OpenLive(opts.IFace, SnapshotLen, Promiscuous, pcap.BlockForever)
+	handle, err := pcap.OpenLive(opts.IFace, snapshotLen, promiscuous, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
