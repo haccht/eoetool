@@ -2,24 +2,46 @@
 
 
 [[projects]]
+  digest = "1:ee5c1cf480b412a3211800d975e624b5eb23c9bec5b4b303a3ab8434f881b706"
   name = "github.com/google/gopacket"
   packages = [
     ".",
     "layers",
-    "pcap"
+    "pcap",
   ]
-  revision = "11c65f1ca9081dfea43b4f9643f5c155583b73ba"
-  version = "v1.1.14"
+  pruneopts = "UT"
+  revision = "7f3fc6cbbb499248dca53da7fe3ed6c25a78d22f"
+  version = "v1.1.16"
 
 [[projects]]
+  branch = "master"
+  digest = "1:50708c8fc92aec981df5c446581cf9f90ba9e2a5692118e0ce75d4534aaa14a2"
+  name = "github.com/influxdata/influxdb1-client"
+  packages = [
+    "models",
+    "pkg/escape",
+    "v2",
+  ]
+  pruneopts = "UT"
+  revision = "16c852ea613fa2d42fcdccc9a8b0802a8bdc6140"
+
+[[projects]]
+  digest = "1:a2cff208d4759f6ba1b1cd228587b0a1869f95f22542ec9cd17fff64430113c7"
   name = "github.com/jessevdk/go-flags"
   packages = ["."]
+  pruneopts = "UT"
   revision = "c6ca198ec95c841fdb89fc0de7496fed11ab854e"
   version = "v1.4.0"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "68bb223e98a2baf803e1e5f2b328389e5f239de15946ff677d985aa88b28babf"
+  input-imports = [
+    "github.com/google/gopacket",
+    "github.com/google/gopacket/layers",
+    "github.com/google/gopacket/pcap",
+    "github.com/influxdata/influxdb1-client/v2",
+    "github.com/jessevdk/go-flags",
+  ]
   solver-name = "gps-cdcl"
   solver-version = 1

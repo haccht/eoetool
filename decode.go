@@ -1,14 +1,14 @@
 package main
 
 import (
-	. "eoetool/lib"
-
 	"flag"
 	"fmt"
 	"log"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
+
+	. "github.com/haccht/eoetool/eoe"
 )
 
 func main() {
@@ -19,7 +19,7 @@ func main() {
 	flag.StringVar(&iface, "I", "eth0", "Name of interface to wait for packet")
 	flag.Parse()
 
-	handle, err := pcap.OpenLive(iface, 65536, false, pcap.BlockForever)
+	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
