@@ -23,15 +23,16 @@ const (
 )
 
 func packetToPoint(packet gopacket.Packet) *influx.Point {
+	tags := map[string]string{}
 	packetLayers := packet.Layers()
 
 	if false ||
 		packetLayers[0].LayerType() != layers.LayerTypeEthernet ||
 		packetLayers[1].LayerType() != layers.LayerTypeDot1Q ||
-		packetLayers[2].LayerType() != LayerTypeEoE {
+		packetLayers[2].LayerType() != LayerTypeEoE ||
+		packetLayers[3].LayerType() != layers.LayerTypeEthernet {
 		return nil
 	}
-	tags := map[string]string{}
 
 	stag, _ := packetLayers[1].(*layers.Dot1Q)
 	tags["pvid"] = fmt.Sprint(stag.VLANIdentifier)
@@ -40,16 +41,15 @@ func packetToPoint(packet gopacket.Packet) *influx.Point {
 	switch {
 	case reflect.DeepEqual(ethernet.DstMAC, layers.EthernetBroadcast):
 		tags["type"] = "broadcast"
-	case ethernet.DstMAC[0]&0x01 == 1:
+	case ethernet.DstMAC[0]&0x01 == 1: //I/G bit
 		tags["type"] = "multicast"
 	default:
 		tags["type"] = "unicast"
 	}
 
-	length := packet.Metadata().Length - 20
+	// 18 (Ethernet) + 4 (Dot1Q) + 2 (EoE) = 24 Bytes
+	length := packet.Metadata().Length - 24
 	switch {
-	case length < 64:
-		tags["length"] = "-"
 	case length < 128:
 		tags["length"] = "64-127"
 	case length < 256:
@@ -74,10 +74,7 @@ func packetToPoint(packet gopacket.Packet) *influx.Point {
 		case layers.LayerTypeDot1Q:
 			ctag, _ := packetLayers[i].(*layers.Dot1Q)
 			cvid = append(cvid, fmt.Sprint(ctag.VLANIdentifier))
-		case gopacket.LayerTypePayload:
-			protocol = packetLayers[i-1].LayerType()
-                        break
-		case gopacket.LayerTypeDecodeFailure:
+		case gopacket.LayerTypePayload, gopacket.LayerTypeDecodeFailure:
 			protocol = packetLayers[i-1].LayerType()
 			break
 		}
@@ -86,7 +83,7 @@ func packetToPoint(packet gopacket.Packet) *influx.Point {
 	tags["cvid"] = strings.Join(cvid, ":")
 	tags["protocol"] = fmt.Sprint(protocol)
 
-        timestamp := packet.Metadata().Timestamp
+	timestamp := packet.Metadata().Timestamp
 	fields := map[string]interface{}{"event": 1}
 	pt, _ := influx.NewPoint(INFLUXDB_SERIES, tags, fields, timestamp)
 
@@ -101,7 +98,7 @@ func openInfluxDB(url, database string) (influx.Client, error) {
 
 	q := influx.NewQuery(fmt.Sprintf("CREATE DATABASE %s", database), "", "")
 	if _, err := client.Query(q); err != nil {
-		log.Printf("Could not create database: %s", err.Error())
+		return nil, err
 	}
 
 	return client, nil
