@@ -12,14 +12,14 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 
-	. "github.com/haccht/eoetool/eoe"
+	"github.com/haccht/eoetool"
 	influx "github.com/influxdata/influxdb1-client/v2"
 )
 
 const (
 	INFLUXDB_URL      = "http://localhost:8086"
-	INFLUXDB_DATABASE = "EoENetwork"
-	INFLUXDB_SERIES   = "BUM"
+	INFLUXDB_DATABASE = "eoepackets"
+	INFLUXDB_SERIES   = "bum"
 )
 
 func packetToPoint(packet gopacket.Packet) *influx.Point {
@@ -29,7 +29,7 @@ func packetToPoint(packet gopacket.Packet) *influx.Point {
 	if false ||
 		packetLayers[0].LayerType() != layers.LayerTypeEthernet ||
 		packetLayers[1].LayerType() != layers.LayerTypeDot1Q ||
-		packetLayers[2].LayerType() != LayerTypeEoE ||
+		packetLayers[2].LayerType() != eoe.LayerTypeEoE ||
 		packetLayers[3].LayerType() != layers.LayerTypeEthernet {
 		return nil
 	}
@@ -69,7 +69,6 @@ func packetToPoint(packet gopacket.Packet) *influx.Point {
 	cvid := []string{}
 	for i := 3; i < len(packetLayers); i++ {
 		protocol = packetLayers[i].LayerType()
-
 		switch protocol {
 		case layers.LayerTypeDot1Q:
 			ctag, _ := packetLayers[i].(*layers.Dot1Q)
@@ -86,7 +85,6 @@ func packetToPoint(packet gopacket.Packet) *influx.Point {
 	timestamp := packet.Metadata().Timestamp
 	fields := map[string]interface{}{"event": 1}
 	pt, _ := influx.NewPoint(INFLUXDB_SERIES, tags, fields, timestamp)
-
 	return pt
 }
 
@@ -106,7 +104,9 @@ func openInfluxDB(url, database string) (influx.Client, error) {
 
 func main() {
 	var iface string
+	var interval int
 
+	flag.IntVar(&interval, "t", 5, "Interval time to dump InfluxDB")
 	flag.StringVar(&iface, "I", "eth0", "Name of interface to wait for packet")
 	flag.Parse()
 
@@ -122,7 +122,7 @@ func main() {
 	}
 	defer influxdb.Close()
 
-	tick := time.NewTicker(5 * time.Second)
+	tick := time.NewTicker(time.Duration(interval) * time.Second)
 	packetSource := gopacket.NewPacketSource(pcapHandle, pcapHandle.LinkType())
 
 	points := []*influx.Point{}

@@ -8,8 +8,8 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/haccht/eoetool"
 
-	. "github.com/haccht/eoetool/eoe"
 	flags "github.com/jessevdk/go-flags"
 )
 
@@ -58,8 +58,8 @@ func main() {
 		buffer,
 		option,
 		newEthernet(opts.DstEoEMAC, opts.SrcEoEMAC, 0x8100),
-		&layers.Dot1Q{VLANIdentifier: uint16(opts.VlanID), Type: EthernetTypeEoE},
-		&EoE{TimeToLive: uint8(opts.EoeTTL), ExtendedID: uint8(opts.EoeEID)},
+		&layers.Dot1Q{VLANIdentifier: uint16(opts.VlanID), Type: eoe.EthernetTypeEoE},
+		&eoe.EoE{TimeToLive: uint8(opts.EoeTTL), ExtendedID: uint8(opts.EoeEID)},
 		newEthernet(opts.DstMAC, opts.SrcMAC, 0x88b8),
 		gopacket.Payload(nil),
 	)

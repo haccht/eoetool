@@ -12,8 +12,8 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/haccht/eoetool"
 
-	. "github.com/haccht/eoetool/eoe"
 	flags "github.com/jessevdk/go-flags"
 )
 
@@ -35,7 +35,11 @@ type options struct {
 	EoEEID    uint   `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
 }
 
-func buildRequest(msg, seq uint16, opts *options) ([]byte, error) {
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+func eoePingRequest(msg, seq uint16, opts *options) ([]byte, error) {
 	dstMAC, err := net.ParseMAC(opts.EoEDstMAC)
 	if err != nil {
 		return nil, err
@@ -62,9 +66,9 @@ func buildRequest(msg, seq uint16, opts *options) ([]byte, error) {
 		},
 		&layers.Dot1Q{
 			VLANIdentifier: uint16(opts.VlanID),
-			Type:           EthernetTypeECP,
+			Type:           eoe.EthernetTypeECP,
 		},
-		&ECP{
+		&eoe.ECP{
 			TimeToLive: uint8(opts.EoETTL),
 			ExtendedID: uint8(opts.EoEEID),
 			SubType:    3,
@@ -81,10 +85,6 @@ func buildRequest(msg, seq uint16, opts *options) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
 func main() {
 	opts := &options{}
 	if _, err := flags.Parse(opts); err != nil {
@@ -97,29 +97,21 @@ func main() {
 	}
 	defer handle.Close()
 
-	ecpReplyPackets := make(chan *ECP)
+	ecpPackets := make(chan *eoe.ECP)
 	go func() {
 		dstMAC, _ := net.ParseMAC(opts.EoEDstMAC)
 		srcMAC, _ := net.ParseMAC(opts.EoESrcMAC)
 
 		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 		for packet := range packetSource.Packets() {
-			ethernetLayer := packet.Layer(layers.LayerTypeEthernet)
-			if ethernetLayer == nil {
-				continue
-			}
-
-			ecpLayer := packet.Layer(LayerTypeECP)
-			if ecpLayer == nil {
-				continue
-			}
-
-			eth, _ := ethernetLayer.(*layers.Ethernet)
-			ecp, _ := ecpLayer.(*ECP)
-
-			if reflect.DeepEqual(eth.DstMAC, srcMAC) && reflect.DeepEqual(eth.SrcMAC, dstMAC) &&
-				ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
-				ecpReplyPackets <- ecp
+			ethLayer := packet.Layer(layers.LayerTypeEthernet)
+			ecpLayer := packet.Layer(eoe.LayerTypeECP)
+			if ethLayer != nil && ecpLayer != nil {
+				eth, _ := ethLayer.(*layers.Ethernet)
+				if reflect.DeepEqual(eth.DstMAC, srcMAC) && reflect.DeepEqual(eth.SrcMAC, dstMAC) {
+					ecp, _ := ecpLayer.(*eoe.ECP)
+					ecpPackets <- ecp
+				}
 			}
 		}
 	}()
@@ -130,42 +122,33 @@ func main() {
 		}
 
 		messageID := uint16(rand.Intn(65536))
-
-		res := make(chan *ECP)
-		req, err := buildRequest(messageID, uint16(seq), opts)
+		resPackets := make(chan *eoe.ECP)
+		reqPacket, err := eoePingRequest(messageID, uint16(seq), opts)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		done := make(chan bool)
 		go func() {
-			for {
-				select {
-				case ecp := <-ecpReplyPackets:
-					if ecp.Sequence == uint16(seq) && ecp.MessageID == messageID {
-						res <- ecp
-					}
-				case <-done:
+			for ecp := range ecpPackets {
+				if ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 &&
+					ecp.Sequence == uint16(seq) && ecp.MessageID == messageID {
+					resPackets <- ecp
 					return
 				}
 			}
 		}()
 
-		startTime := time.Now()
-		if err := handle.WritePacketData(req); err != nil {
+		start := time.Now()
+		if err := handle.WritePacketData(reqPacket); err != nil {
 			log.Fatal(err)
 		}
 
 		select {
-		case ecp := <-res:
-			rtt := float64(time.Since(startTime).Nanoseconds()) / 1000000
+		case ecp := <-ecpPackets:
+			rtt := float64(time.Since(start).Nanoseconds()) / 1000000
 			log.Printf(" 68 bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
 		case <-time.After(time.Duration(opts.Timeout) * time.Second):
 			log.Printf(" ERROR: Request timed out.\n")
 		}
-
-		done <- true
 	}
-
-	close(ecpReplyPackets)
 }

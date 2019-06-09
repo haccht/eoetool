@@ -8,7 +8,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
 
-	. "github.com/haccht/eoetool/eoe"
+	"github.com/haccht/eoetool"
 )
 
 func main() {
@@ -27,12 +27,12 @@ func main() {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for packet := range packetSource.Packets() {
-		if eoeLayer := packet.Layer(LayerTypeEoE); eoeLayer != nil {
+		if eoeLayer := packet.Layer(eoe.LayerTypeEoE); eoeLayer != nil {
 			fmt.Println(packet)
 			fmt.Println("EoE layer decoded.")
 		}
 
-		if ecpLayer := packet.Layer(LayerTypeECP); ecpLayer != nil {
+		if ecpLayer := packet.Layer(eoe.LayerTypeECP); ecpLayer != nil {
 			fmt.Println(packet)
 			fmt.Println("ECP layer decoded.")
 		}
