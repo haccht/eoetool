@@ -122,33 +122,29 @@ func main() {
 		}
 
 		messageID := uint16(rand.Intn(65536))
-		resPackets := make(chan *eoe.ECP)
 		reqPacket, err := eoePingRequest(messageID, uint16(seq), opts)
 		if err != nil {
 			log.Fatal(err)
 		}
-
-		go func() {
-			for ecp := range ecpPackets {
-				if ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 &&
-					ecp.Sequence == uint16(seq) && ecp.MessageID == messageID {
-					resPackets <- ecp
-					return
-				}
-			}
-		}()
 
 		start := time.Now()
 		if err := handle.WritePacketData(reqPacket); err != nil {
 			log.Fatal(err)
 		}
 
-		select {
-		case ecp := <-ecpPackets:
-			rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-			log.Printf(" 68 bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
-		case <-time.After(time.Duration(opts.Timeout) * time.Second):
-			log.Printf(" ERROR: Request timed out.\n")
+	NEXT_PING:
+		for {
+			select {
+			case ecp := <-ecpPackets:
+				if ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 && ecp.Sequence == uint16(seq) && ecp.MessageID == messageID {
+					rtt := float64(time.Since(start).Nanoseconds()) / 1000000
+					log.Printf(" 68 bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
+					break NEXT_PING
+				}
+			case <-time.After(time.Duration(opts.Timeout) * time.Second):
+				log.Printf(" ERROR: Request timed out.\n")
+				break NEXT_PING
+			}
 		}
 	}
 }
