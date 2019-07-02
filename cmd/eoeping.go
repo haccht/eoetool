@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -18,49 +17,29 @@ import (
 )
 
 const (
-	programName string = "EoEPing by haccht"
+	programName string = "eoeping program"
 	snapshotLen int32  = 68
 	promiscuous bool   = true
 )
 
 type options struct {
 	IFace      string `short:"I" long:"iface" description:"Interface name to send requests" required:"true"`
-	Timeout    int    `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"3"`
-	Interval   int    `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"1000"`
-	Count      int    `short:"c" long:"count" description:"Number of requests to send" default:"4"`
+	Timeout    uint16 `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"3"`
+	Interval   uint16 `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"1000"`
+	Count      uint16 `short:"c" long:"count" description:"Number of requests to send" default:"4"`
+	VlanID     uint16 `short:"v" long:"vid" description:"VLAN ID" default:"0"`
 	EoEDstMAC  string `long:"eoe-da" description:"EoE destination address" required:"true"`
 	EoESrcMAC  string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
 	EoEReplyID string `long:"reply-id" description:"EoE reply address" default:"ff:ff:ff:ff:ff:ff"`
-	VlanID     uint   `short:"v" long:"vid" description:"VLAN ID" default:"0"`
-	EoETTL     uint   `short:"T" long:"ttl" description:"EoE time to live" default:"255"`
-	EoEEID     uint   `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
+	EoETTL     uint8  `short:"T" long:"ttl" description:"EoE time to live" default:"255"`
+	EoEEID     uint8  `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
 }
 
 func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func eoePingRequest(msg, seq uint16, opts *options) ([]byte, error) {
-	dstMAC, err := net.ParseMAC(opts.EoEDstMAC)
-	if err != nil {
-		return nil, err
-	}
-
-	srcMAC, err := net.ParseMAC(opts.EoESrcMAC)
-	if err != nil {
-		return nil, err
-	}
-
-	replyID, err := net.ParseMAC(opts.EoEReplyID)
-	if err != nil {
-		return nil, err
-	}
-
-	if opts.VlanID > 0xFFF {
-		err := fmt.Errorf("vlan ID %v out of range", opts.VlanID)
-		return nil, err
-	}
-
+func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uint8, vlanID, messageID, sequence uint16) []byte {
 	buffer := gopacket.NewSerializeBuffer()
 	option := gopacket.SerializeOptions{}
 	gopacket.SerializeLayers(
@@ -71,24 +50,44 @@ func eoePingRequest(msg, seq uint16, opts *options) ([]byte, error) {
 			EthernetType: 0x8100,
 		},
 		&layers.Dot1Q{
-			VLANIdentifier: uint16(opts.VlanID),
+			VLANIdentifier: vlanID,
 			Type:           eoe.EthernetTypeECP,
 		},
 		&eoe.ECP{
-			TimeToLive: uint8(opts.EoETTL),
-			ExtendedID: uint8(opts.EoEEID),
+			TimeToLive: ttl,
+			ExtendedID: eid,
 			SubType:    3,
 			Version:    1,
 			OpCode:     1,
 			SubCode:    1,
-			MessageID:  uint16(msg),
-			Sequence:   uint16(seq),
+			MessageID:  messageID,
+			Sequence:   sequence,
 			ReplyID:    replyID,
 			ChassisID:  programName,
 		},
 	)
 
-	return buffer.Bytes(), nil
+	return buffer.Bytes()
+}
+
+func ecpEchoReplyPackets(handle *pcap.Handle, srcMAC net.HardwareAddr) <-chan *eoe.ECP {
+	ecpEchoReplies := make(chan *eoe.ECP)
+	go func() {
+		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+		for packet := range packetSource.Packets() {
+			ethLayer := packet.Layer(layers.LayerTypeEthernet)
+			ecpLayer := packet.Layer(eoe.LayerTypeECP)
+			if ethLayer != nil && ecpLayer != nil {
+				eth, _ := ethLayer.(*layers.Ethernet)
+				ecp, _ := ecpLayer.(*eoe.ECP)
+				if reflect.DeepEqual(eth.DstMAC, srcMAC) && ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
+					ecpEchoReplies <- ecp
+				}
+			}
+		}
+	}()
+
+	return ecpEchoReplies
 }
 
 func main() {
@@ -97,60 +96,59 @@ func main() {
 		os.Exit(1)
 	}
 
+	dstMAC, err := net.ParseMAC(opts.EoEDstMAC)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	srcMAC, err := net.ParseMAC(opts.EoESrcMAC)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	replyID, err := net.ParseMAC(opts.EoEReplyID)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if opts.VlanID > 0xFFF {
+		log.Fatalf("vlan ID %v out of range", opts.VlanID)
+	}
+
 	handle, err := pcap.OpenLive(opts.IFace, snapshotLen, promiscuous, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer handle.Close()
 
-	ecpPackets := make(chan *eoe.ECP)
-	go func() {
-		dstMAC, _ := net.ParseMAC(opts.EoEDstMAC)
-		srcMAC, _ := net.ParseMAC(opts.EoESrcMAC)
-
-		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-		for packet := range packetSource.Packets() {
-			ethLayer := packet.Layer(layers.LayerTypeEthernet)
-			ecpLayer := packet.Layer(eoe.LayerTypeECP)
-			if ethLayer != nil && ecpLayer != nil {
-				eth, _ := ethLayer.(*layers.Ethernet)
-				if reflect.DeepEqual(eth.DstMAC, srcMAC) && reflect.DeepEqual(eth.SrcMAC, dstMAC) {
-					ecp, _ := ecpLayer.(*eoe.ECP)
-					ecpPackets <- ecp
-				}
-			}
-		}
-	}()
-
-	for seq := 0; seq < opts.Count; seq++ {
+	ecpEchoReplies := ecpEchoReplyPackets(handle, srcMAC)
+	for seq := uint16(0); seq < opts.Count; seq++ {
 		if seq != 0 {
 			time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
 		}
 
 		messageID := uint16(rand.Intn(65536))
-		reqPacket, err := eoePingRequest(messageID, uint16(seq), opts)
-		if err != nil {
-			log.Fatal(err)
-		}
+		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, opts.VlanID, messageID, seq)
 
 		start := time.Now()
 		if err := handle.WritePacketData(reqPacket); err != nil {
 			log.Fatal(err)
 		}
 
-	NEXT_PING:
-		for {
-			select {
-			case ecp := <-ecpPackets:
-				if ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 && ecp.Sequence == uint16(seq) && ecp.MessageID == messageID {
-					rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-					log.Printf(" 68 bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
-					break NEXT_PING
+		func() {
+			for {
+				select {
+				case ecp := <-ecpEchoReplies:
+					if ecp.MessageID == messageID && ecp.Sequence == seq {
+						rtt := float64(time.Since(start).Nanoseconds()) / 1000000
+						log.Printf(" 68 bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
+						return
+					}
+				case <-time.After(time.Duration(opts.Timeout) * time.Second):
+					log.Printf(" ERROR: Request timed out.\n")
+					return
 				}
-			case <-time.After(time.Duration(opts.Timeout) * time.Second):
-				log.Printf(" ERROR: Request timed out.\n")
-				break NEXT_PING
 			}
-		}
+		}()
 	}
 }
