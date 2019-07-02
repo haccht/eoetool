@@ -24,15 +24,16 @@ const (
 )
 
 type options struct {
-	IFace     string `short:"I" long:"iface" description:"Interface name to send requests" required:"true"`
-	Timeout   int    `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"3"`
-	Interval  int    `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"1000"`
-	Count     int    `short:"c" long:"count" description:"Number of requests to send" default:"4"`
-	EoEDstMAC string `long:"eoe-da" description:"EoE destination address" required:"true"`
-	EoESrcMAC string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
-	VlanID    uint   `short:"v" long:"vid" description:"VLAN ID" default:"0"`
-	EoETTL    uint   `short:"T" long:"ttl" description:"EoE time to live" default:"255"`
-	EoEEID    uint   `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
+	IFace      string `short:"I" long:"iface" description:"Interface name to send requests" required:"true"`
+	Timeout    int    `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"3"`
+	Interval   int    `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"1000"`
+	Count      int    `short:"c" long:"count" description:"Number of requests to send" default:"4"`
+	EoEDstMAC  string `long:"eoe-da" description:"EoE destination address" required:"true"`
+	EoESrcMAC  string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
+	EoEReplyID string `long:"reply-id" description:"EoE reply address" default:"ff:ff:ff:ff:ff:ff"`
+	VlanID     uint   `short:"v" long:"vid" description:"VLAN ID" default:"0"`
+	EoETTL     uint   `short:"T" long:"ttl" description:"EoE time to live" default:"255"`
+	EoEEID     uint   `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
 }
 
 func init() {
@@ -46,6 +47,11 @@ func eoePingRequest(msg, seq uint16, opts *options) ([]byte, error) {
 	}
 
 	srcMAC, err := net.ParseMAC(opts.EoESrcMAC)
+	if err != nil {
+		return nil, err
+	}
+
+	replyID, err := net.ParseMAC(opts.EoEReplyID)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +83,7 @@ func eoePingRequest(msg, seq uint16, opts *options) ([]byte, error) {
 			SubCode:    1,
 			MessageID:  uint16(msg),
 			Sequence:   uint16(seq),
-			ReplyID:    layers.EthernetBroadcast,
+			ReplyID:    replyID,
 			ChassisID:  programName,
 		},
 	)
