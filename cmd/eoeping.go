@@ -70,17 +70,20 @@ func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uin
 	return buffer.Bytes()
 }
 
-func ecpEchoReplyPackets(handle *pcap.Handle, srcMAC net.HardwareAddr) <-chan *eoe.ECP {
+func ecpEchoReplyPackets(handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8, vlanID uint16) <-chan *eoe.ECP {
 	ecpEchoReplies := make(chan *eoe.ECP)
 	go func() {
 		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 		for packet := range packetSource.Packets() {
 			ethLayer := packet.Layer(layers.LayerTypeEthernet)
+			d1qLayer := packet.Layer(layers.Dot1Q)
 			ecpLayer := packet.Layer(eoe.LayerTypeECP)
-			if ethLayer != nil && ecpLayer != nil {
+			if ethLayer != nil && d1qLayer != nil && ecpLayer != nil {
 				eth, _ := ethLayer.(*layers.Ethernet)
+				d1q, _ := d1qLayer.(*layers.Dot1Q)
 				ecp, _ := ecpLayer.(*eoe.ECP)
-				if reflect.DeepEqual(eth.DstMAC, srcMAC) && ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
+				if reflect.DeepEqual(eth.DstMAC, srcMAC) && d1q.VLANIdentifier == vlanID && ecp.ExtendedID == eid &&
+					ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
 					ecpEchoReplies <- ecp
 				}
 			}
@@ -121,7 +124,7 @@ func main() {
 	}
 	defer handle.Close()
 
-	ecpEchoReplies := ecpEchoReplyPackets(handle, srcMAC)
+	ecpEchoReplies := ecpEchoReplyPackets(handle, srcMAC, opts.EoEEID, opts.VlanID)
 	for seq := uint16(0); seq < opts.Count; seq++ {
 		if seq != 0 {
 			time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
