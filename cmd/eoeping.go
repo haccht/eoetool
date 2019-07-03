@@ -76,7 +76,7 @@ func ecpEchoReplyPackets(handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8
 		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 		for packet := range packetSource.Packets() {
 			ethLayer := packet.Layer(layers.LayerTypeEthernet)
-			d1qLayer := packet.Layer(layers.Dot1Q)
+			d1qLayer := packet.Layer(layers.LayerTypeDot1Q)
 			ecpLayer := packet.Layer(eoe.LayerTypeECP)
 			if ethLayer != nil && d1qLayer != nil && ecpLayer != nil {
 				eth, _ := ethLayer.(*layers.Ethernet)
