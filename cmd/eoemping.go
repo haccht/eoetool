@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -8,6 +10,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
@@ -18,19 +21,45 @@ import (
 
 const (
 	programName string = "multicast eoeping program"
-	eoeDstMAC   string = "0f:0e:cc:00:00:00" // ECP multicast address
 	snapshotLen int32  = 68
 	promiscuous bool   = true
 )
+
+/*
+  The echo request file is a toml formatted list.
+  Example:
+
+  [[node]]
+  name = "sir03-aes-101"
+  addr = "0e:33:13:8a:10:00"
+  vlan = [100,101,102,103,104,105]
+
+  [[node]]
+  name = "sir03-aes-102"
+  addr = "0e:33:13:8a:20:00"
+  vlan = [100,101,102,103,104,105]
+*/
 
 type options struct {
 	File       string `short:"f" long:"file" description:"Echo request target list file" required:"true"`
 	IFace      string `short:"I" long:"iface" description:"Interface name to send requests" required:"true"`
 	Timeout    int    `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"1"`
 	Interval   int    `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"100"`
+	EoEDstMAC  string `long:"eoe-da" description:"EoE destination address" default:"0f:0e:cc:00:00:00"`
 	EoESrcMAC  string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
-	EoEReplyID string `long:"reply-id" description:"EoE reply address" default:"ff:ff:ff:ff:ff:fe"`
+	EoEReplyID string `long:"reply-id" description:"EoE reply address" default:"ff:ff:ff:ff:ff:ff"`
 	EoETTL     uint   `short:"T" long:"ttl" description:"EoE time to live" default:"25"`
+	EoEEID     uint   `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
+}
+
+type Config struct {
+	Node []NodeConfig
+}
+
+type NodeConfig struct {
+	Name string
+	Addr string
+	Vlan []uint16
 }
 
 func init() {
@@ -68,19 +97,28 @@ func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uin
 	return buffer.Bytes()
 }
 
-func ecpEchoReplyPackets(handle *pcap.Handle, srcMAC net.HardwareAddr) <-chan *eoe.ECP {
+func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8, vlanID uint16) <-chan *eoe.ECP {
 	ecpEchoReplies := make(chan *eoe.ECP)
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+
 	go func() {
-		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-		for packet := range packetSource.Packets() {
-			ethLayer := packet.Layer(layers.LayerTypeEthernet)
-			ecpLayer := packet.Layer(eoe.LayerTypeECP)
-			if ethLayer != nil && ecpLayer != nil {
-				eth, _ := ethLayer.(*layers.Ethernet)
-				ecp, _ := ecpLayer.(*eoe.ECP)
-				if reflect.DeepEqual(eth.DstMAC, srcMAC) && ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
-					ecpEchoReplies <- ecp
+		for {
+			select {
+			case packet := <-packetSource.Packets():
+				ethLayer := packet.Layer(layers.LayerTypeEthernet)
+				d1qLayer := packet.Layer(layers.LayerTypeDot1Q)
+				ecpLayer := packet.Layer(eoe.LayerTypeECP)
+				if ethLayer != nil && d1qLayer != nil && ecpLayer != nil {
+					eth, _ := ethLayer.(*layers.Ethernet)
+					d1q, _ := d1qLayer.(*layers.Dot1Q)
+					ecp, _ := ecpLayer.(*eoe.ECP)
+					if reflect.DeepEqual(eth.DstMAC, srcMAC) && d1q.VLANIdentifier == vlanID && ecp.ExtendedID == eid &&
+						ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
+						ecpEchoReplies <- ecp
+					}
 				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -92,6 +130,20 @@ func main() {
 	opts := &options{}
 	if _, err := flags.Parse(opts); err != nil {
 		os.Exit(1)
+	}
+
+	var c Config
+	_, err := toml.DecodeFile(opts.File, &c)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	target := make(map[uint16][]NodeConfig)
+	for _, node := range c.Node {
+		for _, vlan := range node.Vlan {
+			nodes := target[vlan]
+			target[vlan] = append(nodes, node)
+		}
 	}
 
 	dstMAC, err := net.ParseMAC(opts.EoEDstMAC)
@@ -109,22 +161,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if opts.VlanID > 0xFFF {
-		log.Fatalf("vlan ID %v out of range", opts.VlanID)
-	}
-
 	handle, err := pcap.OpenLive(opts.IFace, snapshotLen, promiscuous, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer handle.Close()
 
-	ecpEchoReplies := ecpEchoReplyPackets(handle, srcMAC)
+	for vlan, nodes := range target {
+		ctx := context.Background()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-	for seq := 0; seq < opts.Count; seq++ {
-		if seq != 0 {
-			time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
-		}
+		ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC, opts.EoEEID, vlan)
 
 		messageID := uint16(rand.Intn(65536))
 		reqPacket, err := eoePingRequest(messageID, uint16(seq), opts)

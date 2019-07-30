@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"math/rand"
 	"net"
@@ -70,22 +71,28 @@ func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uin
 	return buffer.Bytes()
 }
 
-func ecpEchoReplyPackets(handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8, vlanID uint16) <-chan *eoe.ECP {
+func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8, vlanID uint16) <-chan *eoe.ECP {
 	ecpEchoReplies := make(chan *eoe.ECP)
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+
 	go func() {
-		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-		for packet := range packetSource.Packets() {
-			ethLayer := packet.Layer(layers.LayerTypeEthernet)
-			d1qLayer := packet.Layer(layers.LayerTypeDot1Q)
-			ecpLayer := packet.Layer(eoe.LayerTypeECP)
-			if ethLayer != nil && d1qLayer != nil && ecpLayer != nil {
-				eth, _ := ethLayer.(*layers.Ethernet)
-				d1q, _ := d1qLayer.(*layers.Dot1Q)
-				ecp, _ := ecpLayer.(*eoe.ECP)
-				if reflect.DeepEqual(eth.DstMAC, srcMAC) && d1q.VLANIdentifier == vlanID && ecp.ExtendedID == eid &&
-					ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
-					ecpEchoReplies <- ecp
+		for {
+			select {
+			case packet := <-packetSource.Packets():
+				ethLayer := packet.Layer(layers.LayerTypeEthernet)
+				d1qLayer := packet.Layer(layers.LayerTypeDot1Q)
+				ecpLayer := packet.Layer(eoe.LayerTypeECP)
+				if ethLayer != nil && d1qLayer != nil && ecpLayer != nil {
+					eth, _ := ethLayer.(*layers.Ethernet)
+					d1q, _ := d1qLayer.(*layers.Dot1Q)
+					ecp, _ := ecpLayer.(*eoe.ECP)
+					if reflect.DeepEqual(eth.DstMAC, srcMAC) && d1q.VLANIdentifier == vlanID && ecp.ExtendedID == eid &&
+						ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
+						ecpEchoReplies <- ecp
+					}
 				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -124,7 +131,11 @@ func main() {
 	}
 	defer handle.Close()
 
-	ecpEchoReplies := ecpEchoReplyPackets(handle, srcMAC, opts.EoEEID, opts.VlanID)
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC, opts.EoEEID, opts.VlanID)
 	for seq := uint16(0); seq < opts.Count; seq++ {
 		if seq != 0 {
 			time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
@@ -144,7 +155,7 @@ func main() {
 				case ecp := <-ecpEchoReplies:
 					if ecp.MessageID == messageID && ecp.Sequence == seq {
 						rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-						log.Printf(" 68 bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
+						log.Printf(" %d bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", snapshotLen, ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
 						return
 					}
 				case <-time.After(time.Duration(opts.Timeout) * time.Second):
