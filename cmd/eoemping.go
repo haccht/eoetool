@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -48,8 +47,8 @@ type options struct {
 	EoEDstMAC  string `long:"eoe-da" description:"EoE destination address" default:"0f:0e:cc:00:00:00"`
 	EoESrcMAC  string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
 	EoEReplyID string `long:"reply-id" description:"EoE reply address" default:"ff:ff:ff:ff:ff:ff"`
-	EoETTL     uint   `short:"T" long:"ttl" description:"EoE time to live" default:"25"`
-	EoEEID     uint   `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
+	EoETTL     uint8  `short:"T" long:"ttl" description:"EoE time to live" default:"25"`
+	EoEEID     uint8  `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
 }
 
 type Config struct {
@@ -60,6 +59,10 @@ type NodeConfig struct {
 	Name string
 	Addr string
 	Vlan []uint16
+}
+
+func (nc NodeConfig) HardwareAddr() (net.HardwareAddr, error) {
+	return net.ParseMAC(nc.Addr)
 }
 
 func init() {
@@ -97,8 +100,8 @@ func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uin
 	return buffer.Bytes()
 }
 
-func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8, vlanID uint16) <-chan *eoe.ECP {
-	ecpEchoReplies := make(chan *eoe.ECP)
+func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8, vlanID uint16) <-chan gopacket.Packet {
+	ecpEchoReplies := make(chan gopacket.Packet)
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
 	go func() {
@@ -114,7 +117,7 @@ func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.Ha
 					ecp, _ := ecpLayer.(*eoe.ECP)
 					if reflect.DeepEqual(eth.DstMAC, srcMAC) && d1q.VLANIdentifier == vlanID && ecp.ExtendedID == eid &&
 						ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
-						ecpEchoReplies <- ecp
+						ecpEchoReplies <- packet
 					}
 				}
 			case <-ctx.Done():
@@ -138,11 +141,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	target := make(map[uint16][]NodeConfig)
+	vlanToNodes := make(map[uint16][]NodeConfig)
 	for _, node := range c.Node {
-		for _, vlan := range node.Vlan {
-			nodes := target[vlan]
-			target[vlan] = append(nodes, node)
+		for _, vlanID := range node.Vlan {
+			nodes := vlanToNodes[vlanID]
+			vlanToNodes[vlanID] = append(nodes, node)
 		}
 	}
 
@@ -167,20 +170,17 @@ func main() {
 	}
 	defer handle.Close()
 
-	for vlan, nodes := range target {
+	for vlanID, nodes := range vlanToNodes {
 		ctx := context.Background()
 		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
 
-		ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC, opts.EoEEID, vlan)
-
-		messageID := uint16(rand.Intn(65536))
-		reqPacket, err := eoePingRequest(messageID, uint16(seq), opts)
-		if err != nil {
-			log.Fatal(err)
-		}
+		nodesNG := make([]NodeConfig, len(nodes))
+		ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC, opts.EoEEID, vlanID)
 
 		start := time.Now()
+		messageID := uint16(rand.Intn(65536))
+		sequence := uint16(rand.Intn(65536))
+		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, vlanID, messageID, sequence)
 		if err := handle.WritePacketData(reqPacket); err != nil {
 			log.Fatal(err)
 		}
@@ -188,17 +188,34 @@ func main() {
 		func() {
 			for {
 				select {
-				case ecp := <-ecpEchoReplies:
-					if ecp.MessageID == messageID && ecp.Sequence == seq {
-						rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-						log.Printf(" 68 bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
+				case packet := <-ecpEchoReplies:
+					ethLayer := packet.Layer(layers.LayerTypeEthernet)
+					ecpLayer := packet.Layer(eoe.LayerTypeECP)
+					eth, _ := ethLayer.(*layers.Ethernet)
+					ecp, _ := ecpLayer.(*eoe.ECP)
+
+					if ecp.MessageID == messageID && ecp.Sequence == sequence {
+						for _, n := range nodes {
+							hwAddr, err := n.HardwareAddr()
+							if err == nil && reflect.DeepEqual(hwAddr, eth.SrcMAC) {
+								nodesNG = append(nodesNG, n)
+								rtt := float64(time.Since(start).Nanoseconds()) / 1000000
+								log.Printf(" %d bytes from %s(%s) : vid=%d.%d ttl=%d time=%.3f ms\n", snapshotLen, n.Name, n.Addr, opts.EoEEID, vlanID, ecp.TimeToLive, rtt)
+								break
+							}
+						}
+
 						return
 					}
 				case <-time.After(time.Duration(opts.Timeout) * time.Second):
-					log.Printf(" ERROR: Request timed out.\n")
+					cancel()
 					return
 				}
 			}
 		}()
+
+		for _, n := range nodesNG {
+			log.Printf(" ERROR: Request timed out - %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
+		}
 	}
 }
