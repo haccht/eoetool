@@ -173,7 +173,6 @@ func main() {
 		ctx := context.Background()
 		ctx, cancel := context.WithCancel(ctx)
 
-		nodesOK := make([]bool, len(nodes))
 		ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC, opts.EoEEID, vlanID)
 
 		start := time.Now()
@@ -186,6 +185,7 @@ func main() {
 
 		func() {
 			countOK := 0
+			nodesOK := make([]bool, len(nodes))
 
 			for {
 				select {
@@ -216,7 +216,7 @@ func main() {
 					for i, ok := range nodesOK {
 						if !ok {
 							n := nodes[i]
-							log.Printf(" ERROR: Request timed out - %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
+							log.Printf(" ERROR: Request timed out for %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
 						}
 					}
 
