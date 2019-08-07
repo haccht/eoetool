@@ -27,16 +27,15 @@ const (
 /*
   The echo request file is a toml formatted list.
   Example:
+[[node]]
+name = "ap16012-01"
+addr = "0e:33:00:00:10:00"
+vlan = [100,101,102]
 
-  [[node]]
-  name = "sir03-aes-101"
-  addr = "0e:33:13:8a:10:00"
-  vlan = [100,101,102,103,104,105]
-
-  [[node]]
-  name = "sir03-aes-102"
-  addr = "0e:33:13:8a:20:00"
-  vlan = [100,101,102,103,104,105]
+[[node]]
+name = "ap16012-02"
+addr = "0e:33:00:00:20:00"
+vlan = [100,101,103]
 */
 
 type options struct {
@@ -141,11 +140,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	vlanToNodes := make(map[uint16][]NodeConfig)
+	vlanToNodes := make(map[uint16][]*NodeConfig)
 	for _, node := range c.Node {
 		for _, vlanID := range node.Vlan {
 			nodes := vlanToNodes[vlanID]
-			vlanToNodes[vlanID] = append(nodes, node)
+			vlanToNodes[vlanID] = append(nodes, &node)
 		}
 	}
 
@@ -174,7 +173,7 @@ func main() {
 		ctx := context.Background()
 		ctx, cancel := context.WithCancel(ctx)
 
-		nodesNG := make([]NodeConfig, len(nodes))
+		nodesOK := make([]bool, len(nodes))
 		ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC, opts.EoEEID, vlanID)
 
 		start := time.Now()
@@ -186,6 +185,8 @@ func main() {
 		}
 
 		func() {
+			countOK := 0
+
 			for {
 				select {
 				case packet := <-ecpEchoReplies:
@@ -195,27 +196,35 @@ func main() {
 					ecp, _ := ecpLayer.(*eoe.ECP)
 
 					if ecp.MessageID == messageID && ecp.Sequence == sequence {
-						for _, n := range nodes {
+						for i, n := range nodes {
 							hwAddr, err := n.HardwareAddr()
 							if err == nil && reflect.DeepEqual(hwAddr, eth.SrcMAC) {
-								nodesNG = append(nodesNG, n)
+								countOK++
+								nodesOK[i] = true
+
 								rtt := float64(time.Since(start).Nanoseconds()) / 1000000
 								log.Printf(" %d bytes from %s(%s) : vid=%d.%d ttl=%d time=%.3f ms\n", snapshotLen, n.Name, n.Addr, opts.EoEEID, vlanID, ecp.TimeToLive, rtt)
 								break
 							}
 						}
 
-						return
+						if countOK == len(nodes) {
+							return
+						}
 					}
 				case <-time.After(time.Duration(opts.Timeout) * time.Second):
-					cancel()
+					for i, ok := range nodesOK {
+						if !ok {
+							n := nodes[i]
+							log.Printf(" ERROR: Request timed out - %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
+						}
+					}
+
 					return
 				}
 			}
 		}()
 
-		for _, n := range nodesNG {
-			log.Printf(" ERROR: Request timed out - %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
-		}
+		cancel()
 	}
 }
