@@ -99,7 +99,7 @@ func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uin
 	return buffer.Bytes()
 }
 
-func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8, vlanID uint16) <-chan gopacket.Packet {
+func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.HardwareAddr) <-chan gopacket.Packet {
 	ecpEchoReplies := make(chan gopacket.Packet)
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
@@ -108,13 +108,11 @@ func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.Ha
 			select {
 			case packet := <-packetSource.Packets():
 				ethLayer := packet.Layer(layers.LayerTypeEthernet)
-				d1qLayer := packet.Layer(layers.LayerTypeDot1Q)
 				ecpLayer := packet.Layer(eoe.LayerTypeECP)
-				if ethLayer != nil && d1qLayer != nil && ecpLayer != nil {
+				if ethLayer != nil && ecpLayer != nil {
 					eth, _ := ethLayer.(*layers.Ethernet)
-					d1q, _ := d1qLayer.(*layers.Dot1Q)
 					ecp, _ := ecpLayer.(*eoe.ECP)
-					if reflect.DeepEqual(eth.DstMAC, srcMAC) && d1q.VLANIdentifier == vlanID && ecp.ExtendedID == eid &&
+					if reflect.DeepEqual(eth.DstMAC, srcMAC) &&
 						ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
 						ecpEchoReplies <- packet
 					}
@@ -140,11 +138,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	vlanToNodes := make(map[uint16][]*NodeConfig)
+	vlanToNodes := make(map[uint16][]NodeConfig)
 	for _, node := range c.Node {
 		for _, vlanID := range node.Vlan {
 			nodes := vlanToNodes[vlanID]
-			vlanToNodes[vlanID] = append(nodes, &node)
+			vlanToNodes[vlanID] = append(nodes, node)
 		}
 	}
 
@@ -167,15 +165,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer handle.Close()
+	//defer handle.Close()
+	//defer os.Exit(0)
 
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC)
 	for vlanID, nodes := range vlanToNodes {
-		ctx := context.Background()
-		ctx, cancel := context.WithCancel(ctx)
-
-		ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC, opts.EoEEID, vlanID)
-
 		start := time.Now()
+
 		messageID := uint16(rand.Intn(65536))
 		sequence := uint16(rand.Intn(65536))
 		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, vlanID, messageID, sequence)
@@ -190,12 +190,10 @@ func main() {
 			for {
 				select {
 				case packet := <-ecpEchoReplies:
-					ethLayer := packet.Layer(layers.LayerTypeEthernet)
-					ecpLayer := packet.Layer(eoe.LayerTypeECP)
-					eth, _ := ethLayer.(*layers.Ethernet)
-					ecp, _ := ecpLayer.(*eoe.ECP)
-
-					if ecp.MessageID == messageID && ecp.Sequence == sequence {
+					eth, _ := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+					d1q, _ := packet.Layer(layers.LayerTypeDot1Q).(*layers.Dot1Q)
+					ecp, _ := packet.Layer(eoe.LayerTypeECP).(*eoe.ECP)
+					if ecp.ExtendedID == opts.EoEEID && d1q.VLANIdentifier == vlanID && ecp.MessageID == messageID && ecp.Sequence == sequence {
 						for i, n := range nodes {
 							hwAddr, err := n.HardwareAddr()
 							if err == nil && reflect.DeepEqual(hwAddr, eth.SrcMAC) {
@@ -203,7 +201,7 @@ func main() {
 								nodesOK[i] = true
 
 								rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-								log.Printf(" %d bytes from %s(%s) : vid=%d.%d ttl=%d time=%.3f ms\n", snapshotLen, n.Name, n.Addr, opts.EoEEID, vlanID, ecp.TimeToLive, rtt)
+								log.Printf("%d bytes from %s(%s) : vid=%d.%d ttl=%d time=%.3f ms\n", snapshotLen, n.Name, n.Addr, opts.EoEEID, vlanID, ecp.TimeToLive, rtt)
 								break
 							}
 						}
@@ -216,7 +214,7 @@ func main() {
 					for i, ok := range nodesOK {
 						if !ok {
 							n := nodes[i]
-							log.Printf(" ERROR: Request timed out for %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
+							log.Printf("ERROR: Request timed out for %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
 						}
 					}
 
@@ -224,7 +222,5 @@ func main() {
 				}
 			}
 		}()
-
-		cancel()
 	}
 }

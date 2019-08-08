@@ -71,7 +71,7 @@ func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uin
 	return buffer.Bytes()
 }
 
-func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.HardwareAddr, eid uint8, vlanID uint16) <-chan gopacket.Packet {
+func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.HardwareAddr) <-chan gopacket.Packet {
 	ecpEchoReplies := make(chan gopacket.Packet)
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
@@ -80,13 +80,11 @@ func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.Ha
 			select {
 			case packet := <-packetSource.Packets():
 				ethLayer := packet.Layer(layers.LayerTypeEthernet)
-				d1qLayer := packet.Layer(layers.LayerTypeDot1Q)
 				ecpLayer := packet.Layer(eoe.LayerTypeECP)
-				if ethLayer != nil && d1qLayer != nil && ecpLayer != nil {
+				if ethLayer != nil && ecpLayer != nil {
 					eth, _ := ethLayer.(*layers.Ethernet)
-					d1q, _ := d1qLayer.(*layers.Dot1Q)
 					ecp, _ := ecpLayer.(*eoe.ECP)
-					if reflect.DeepEqual(eth.DstMAC, srcMAC) && d1q.VLANIdentifier == vlanID && ecp.ExtendedID == eid &&
+					if reflect.DeepEqual(eth.DstMAC, srcMAC) &&
 						ecp.SubType == 3 && ecp.Version == 1 && ecp.OpCode == 1 && ecp.SubCode == 2 {
 						ecpEchoReplies <- packet
 					}
@@ -135,7 +133,7 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC, opts.EoEEID, opts.VlanID)
+	ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC)
 	for seq := uint16(0); seq < opts.Count; seq++ {
 		if seq != 0 {
 			time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
@@ -152,12 +150,12 @@ func main() {
 			for {
 				select {
 				case packet := <-ecpEchoReplies:
-					ecpLayer := packet.Layer(eoe.LayerTypeECP)
-					ecp, _ := ecpLayer.(*eoe.ECP)
-
-					if ecp.MessageID == messageID && ecp.Sequence == seq {
+					eth, _ := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+					d1q, _ := packet.Layer(layers.LayerTypeDot1Q).(*layers.Dot1Q)
+					ecp, _ := packet.Layer(eoe.LayerTypeECP).(*eoe.ECP)
+					if d1q.VLANIdentifier == opts.VlanID && ecp.ExtendedID == opts.EoEEID && ecp.MessageID == messageID && ecp.Sequence == seq {
 						rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-						log.Printf(" %d bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", snapshotLen, ecp.ReplyID.String(), ecp.Sequence, ecp.TimeToLive, rtt)
+						log.Printf(" %d bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", snapshotLen, eth.SrcMAC.String(), ecp.Sequence, ecp.TimeToLive, rtt)
 						return
 					}
 				case <-time.After(time.Duration(opts.Timeout) * time.Second):
