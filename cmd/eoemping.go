@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	programName string = "multicast eoeping program"
-	snapshotLen int32  = 68
 	promiscuous bool   = true
+	letterBytes string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 
 /*
@@ -43,6 +42,7 @@ type options struct {
 	IFace      string `short:"I" long:"iface" description:"Interface name to send requests" required:"true"`
 	Timeout    int    `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"1"`
 	Interval   int    `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"100"`
+	Length     uint16 `short:"l" long:"length" description:"Frame length (without CRC)" default:"68"`
 	EoEDstMAC  string `long:"eoe-da" description:"EoE destination address" default:"0f:0e:cc:00:00:00"`
 	EoESrcMAC  string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
 	EoEReplyID string `long:"reply-id" description:"EoE reply address" default:"ff:ff:ff:ff:ff:ff"`
@@ -68,7 +68,12 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uint8, vlanID, messageID, sequence uint16) []byte {
+func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uint8, length, vlanID, messageID, sequence uint16) []byte {
+	chassisID := make([]byte, length-36)
+	for i := range chassisID {
+		chassisID[i] = letterBytes[rand.Intn(len(letterBytes))]
+	}
+
 	buffer := gopacket.NewSerializeBuffer()
 	option := gopacket.SerializeOptions{}
 	gopacket.SerializeLayers(
@@ -92,7 +97,7 @@ func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uin
 			MessageID:  messageID,
 			Sequence:   sequence,
 			ReplyID:    replyID,
-			ChassisID:  programName,
+			ChassisID:  string(chassisID),
 		},
 	)
 
@@ -161,7 +166,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	handle, err := pcap.OpenLive(opts.IFace, snapshotLen, promiscuous, pcap.BlockForever)
+	if opts.Length < 68 || 1518 < opts.Length {
+		log.Fatalf("length %d out of range", opts.Length)
+	}
+
+	handle, err := pcap.OpenLive(opts.IFace, int32(opts.Length), promiscuous, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -178,7 +187,7 @@ func main() {
 
 		messageID := uint16(rand.Intn(65536))
 		sequence := uint16(rand.Intn(65536))
-		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, vlanID, messageID, sequence)
+		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, opts.Length, vlanID, messageID, sequence)
 		if err := handle.WritePacketData(reqPacket); err != nil {
 			log.Fatal(err)
 		}
@@ -201,7 +210,7 @@ func main() {
 								nodesOK[i] = true
 
 								rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-								log.Printf("%d bytes from %s(%s) : vid=%d.%d ttl=%d time=%.3f ms\n", snapshotLen, n.Name, n.Addr, opts.EoEEID, vlanID, ecp.TimeToLive, rtt)
+								log.Printf("%d bytes from %s(%s) : vid=%d.%d ttl=%d time=%.3f ms\n", len(packet.Data()), n.Name, n.Addr, opts.EoEEID, vlanID, ecp.TimeToLive, rtt)
 								break
 							}
 						}
