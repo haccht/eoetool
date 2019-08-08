@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	letterBytes string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	promiscuous bool   = true
+	letterBytes string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 
 type options struct {
@@ -27,7 +27,7 @@ type options struct {
 	Timeout    uint16 `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"3"`
 	Interval   uint16 `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"1000"`
 	Count      uint16 `short:"c" long:"count" description:"Number of requests to send" default:"4"`
-	Length     uint16 `short:"l" long:"length" description:"Frame length" default:"72"`
+	Length     uint16 `short:"l" long:"length" description:"Frame length (without CRC)" default:"68"`
 	VlanID     uint16 `short:"v" long:"vid" description:"VLAN ID" default:"0"`
 	EoEDstMAC  string `long:"eoe-da" description:"EoE destination address" required:"true"`
 	EoESrcMAC  string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
@@ -41,7 +41,7 @@ func init() {
 }
 
 func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uint8, length, vlanID, messageID, sequence uint16) []byte {
-	chassisID := make([]byte, length-48)
+	chassisID := make([]byte, length-36)
 	for i := range chassisID {
 		chassisID[i] = letterBytes[rand.Intn(len(letterBytes))]
 	}
@@ -128,11 +128,15 @@ func main() {
 		log.Fatalf("vlan ID %v out of range", opts.VlanID)
 	}
 
+	if opts.Length < 68 || 1518 < opts.Length {
+		log.Fatalf("length %d out of range", opts.Length)
+	}
+
 	handle, err := pcap.OpenLive(opts.IFace, int32(opts.Length), promiscuous, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer handle.Close()
+	//defer handle.Close()
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
