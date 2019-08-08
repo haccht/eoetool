@@ -18,8 +18,7 @@ import (
 )
 
 const (
-	programName string = "eoeping program"
-	snapshotLen int32  = 68
+	letterBytes string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	promiscuous bool   = true
 )
 
@@ -28,6 +27,7 @@ type options struct {
 	Timeout    uint16 `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"3"`
 	Interval   uint16 `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"1000"`
 	Count      uint16 `short:"c" long:"count" description:"Number of requests to send" default:"4"`
+	Length     uint16 `short:"l" long:"length" description:"Frame length" default:"72"`
 	VlanID     uint16 `short:"v" long:"vid" description:"VLAN ID" default:"0"`
 	EoEDstMAC  string `long:"eoe-da" description:"EoE destination address" required:"true"`
 	EoESrcMAC  string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
@@ -40,7 +40,12 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uint8, vlanID, messageID, sequence uint16) []byte {
+func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uint8, length, vlanID, messageID, sequence uint16) []byte {
+	chassisID := make([]byte, length-48)
+	for i := range chassisID {
+		chassisID[i] = letterBytes[rand.Intn(len(letterBytes))]
+	}
+
 	buffer := gopacket.NewSerializeBuffer()
 	option := gopacket.SerializeOptions{}
 	gopacket.SerializeLayers(
@@ -64,7 +69,7 @@ func ecpEchoRequestPacket(dstMAC, srcMAC, replyID net.HardwareAddr, ttl, eid uin
 			MessageID:  messageID,
 			Sequence:   sequence,
 			ReplyID:    replyID,
-			ChassisID:  programName,
+			ChassisID:  string(chassisID),
 		},
 	)
 
@@ -123,7 +128,7 @@ func main() {
 		log.Fatalf("vlan ID %v out of range", opts.VlanID)
 	}
 
-	handle, err := pcap.OpenLive(opts.IFace, snapshotLen, promiscuous, pcap.BlockForever)
+	handle, err := pcap.OpenLive(opts.IFace, int32(opts.Length), promiscuous, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -141,7 +146,7 @@ func main() {
 
 		start := time.Now()
 		messageID := uint16(rand.Intn(65536))
-		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, opts.VlanID, messageID, seq)
+		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, opts.Length, opts.VlanID, messageID, seq)
 		if err := handle.WritePacketData(reqPacket); err != nil {
 			log.Fatal(err)
 		}
@@ -155,7 +160,7 @@ func main() {
 					ecp, _ := packet.Layer(eoe.LayerTypeECP).(*eoe.ECP)
 					if d1q.VLANIdentifier == opts.VlanID && ecp.ExtendedID == opts.EoEEID && ecp.MessageID == messageID && ecp.Sequence == seq {
 						rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-						log.Printf(" %d bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", snapshotLen, eth.SrcMAC.String(), ecp.Sequence, ecp.TimeToLive, rtt)
+						log.Printf(" %d bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", len(packet.Data()), eth.SrcMAC.String(), ecp.Sequence, ecp.TimeToLive, rtt)
 						return
 					}
 				case <-time.After(time.Duration(opts.Timeout) * time.Second):
