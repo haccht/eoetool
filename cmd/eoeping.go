@@ -147,8 +147,8 @@ func main() {
 		if seq != 0 {
 			time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
 		}
-
 		start := time.Now()
+
 		messageID := uint16(rand.Intn(65536))
 		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, opts.Length, opts.VlanID, messageID, seq)
 		if err := handle.WritePacketData(reqPacket); err != nil {

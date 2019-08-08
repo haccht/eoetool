@@ -183,6 +183,9 @@ func main() {
 
 	ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC)
 	for vlanID, nodes := range vlanToNodes {
+		if seq != 0 {
+			time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
+		}
 		start := time.Now()
 
 		messageID := uint16(rand.Intn(65536))
