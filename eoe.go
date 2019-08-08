@@ -123,6 +123,7 @@ func (ecp *ECP) Payload() []byte {
 }
 
 func (ecp *ECP) DecodeFromBytes(data []byte, df gopacket.DecodeFeedback) error {
+	cLen := len(data) - 36
 	ecp.TimeToLive = uint8(data[0])
 	ecp.ExtendedID = uint8(data[1])
 	ecp.SubType = uint8(data[2])
@@ -132,15 +133,16 @@ func (ecp *ECP) DecodeFromBytes(data []byte, df gopacket.DecodeFeedback) error {
 	ecp.MessageID = binary.BigEndian.Uint16(data[6:8])
 	ecp.Sequence = binary.BigEndian.Uint16(data[8:10])
 	ecp.ReplyID = net.HardwareAddr(data[10:16])
-	ecp.ChassisID = string(data[16:48])
-	ecp.Slot = uint8(data[48])
-	ecp.Port = uint8(data[49])
-	ecp.BaseLayer = layers.BaseLayer{Contents: data[:50], Payload: nil}
+	ecp.ChassisID = string(data[16 : 16+cLen])
+	ecp.Slot = uint8(data[16+cLen])
+	ecp.Port = uint8(data[17+cLen])
+	ecp.BaseLayer = layers.BaseLayer{Contents: data[:18+cLen], Payload: nil}
 	return nil
 }
 
 func (ecp *ECP) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeOptions) error {
-	bytes, err := b.PrependBytes(50)
+	cLen := len(ecp.ChassisID)
+	bytes, err := b.PrependBytes(18 + cLen)
 	if err != nil {
 		return err
 	}
@@ -155,7 +157,8 @@ func (ecp *ECP) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeO
 	binary.BigEndian.PutUint16(bytes[8:], ecp.Sequence)
 	copy(bytes[10:], ecp.ReplyID)
 	copy(bytes[16:], []byte(ecp.ChassisID))
-	bytes[48] = ecp.Slot
-	bytes[49] = ecp.Port
+
+	bytes[16+cLen] = ecp.Slot
+	bytes[17+cLen] = ecp.Port
 	return nil
 }
