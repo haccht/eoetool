@@ -133,6 +133,9 @@ func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.Ha
 
 func main() {
 	opts := &options{}
+	stdout := log.New(os.Stdout, "", 0)
+	stderr := log.New(os.Stderr, "", 0)
+
 	if _, err := flags.Parse(opts); err != nil {
 		os.Exit(1)
 	}
@@ -140,7 +143,7 @@ func main() {
 	var c Config
 	_, err := toml.DecodeFile(opts.File, &c)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 
 	vlanToNodes := make(map[uint16][]NodeConfig)
@@ -153,26 +156,26 @@ func main() {
 
 	dstMAC, err := net.ParseMAC(opts.EoEDstMAC)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 
 	srcMAC, err := net.ParseMAC(opts.EoESrcMAC)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 
 	replyID, err := net.ParseMAC(opts.EoEReplyID)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 
 	if opts.Length < 68 || 1518 < opts.Length {
-		log.Fatalf("length %d out of range", opts.Length)
+		stderr.Fatalf("length %d out of range", opts.Length)
 	}
 
 	handle, err := pcap.OpenLive(opts.IFace, int32(opts.Length), promiscuous, pcap.BlockForever)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 	//defer handle.Close()
 	//defer os.Exit(0)
@@ -183,16 +186,14 @@ func main() {
 
 	ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC)
 	for vlanID, nodes := range vlanToNodes {
-		if seq != 0 {
-			time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
-		}
 		start := time.Now()
+		time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
 
 		messageID := uint16(rand.Intn(65536))
 		sequence := uint16(rand.Intn(65536))
 		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, opts.Length, vlanID, messageID, sequence)
 		if err := handle.WritePacketData(reqPacket); err != nil {
-			log.Fatal(err)
+			stderr.Fatal(err)
 		}
 
 		func() {
@@ -213,7 +214,7 @@ func main() {
 								nodesOK[i] = true
 
 								rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-								log.Printf("%d bytes from %s(%s) : vid=%d.%d ttl=%d time=%.3f ms\n", len(packet.Data()), n.Name, n.Addr, opts.EoEEID, vlanID, ecp.TimeToLive, rtt)
+								stdout.Printf("%d bytes from %s(%s) : vid=%d.%d ttl=%d time=%.3f ms\n", len(packet.Data()), n.Name, n.Addr, opts.EoEEID, vlanID, ecp.TimeToLive, rtt)
 								break
 							}
 						}
@@ -226,7 +227,7 @@ func main() {
 					for i, ok := range nodesOK {
 						if !ok {
 							n := nodes[i]
-							log.Printf("ERROR: Request timed out for %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
+							stderr.Printf("ERROR: Request timed out for %s(%s) : vid=%d.%d", n.Name, n.Addr, opts.EoEEID, vlanID)
 						}
 					}
 

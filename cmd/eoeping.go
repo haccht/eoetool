@@ -105,36 +105,39 @@ func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.Ha
 
 func main() {
 	opts := &options{}
+	stdout := log.New(os.Stdout, "", 0)
+	stderr := log.New(os.Stderr, "", 0)
+
 	if _, err := flags.Parse(opts); err != nil {
 		os.Exit(1)
 	}
 
 	dstMAC, err := net.ParseMAC(opts.EoEDstMAC)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 
 	srcMAC, err := net.ParseMAC(opts.EoESrcMAC)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 
 	replyID, err := net.ParseMAC(opts.EoEReplyID)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 
 	if opts.VlanID > 0xFFF {
-		log.Fatalf("vlan ID %v out of range", opts.VlanID)
+		stderr.Fatalf("vlan ID %v out of range", opts.VlanID)
 	}
 
 	if opts.Length < 68 || 1518 < opts.Length {
-		log.Fatalf("length %d out of range", opts.Length)
+		stderr.Fatalf("length %d out of range", opts.Length)
 	}
 
 	handle, err := pcap.OpenLive(opts.IFace, int32(opts.Length), promiscuous, pcap.BlockForever)
 	if err != nil {
-		log.Fatal(err)
+		stderr.Fatal(err)
 	}
 	//defer handle.Close()
 
@@ -152,7 +155,7 @@ func main() {
 		messageID := uint16(rand.Intn(65536))
 		reqPacket := ecpEchoRequestPacket(dstMAC, srcMAC, replyID, opts.EoETTL, opts.EoEEID, opts.Length, opts.VlanID, messageID, seq)
 		if err := handle.WritePacketData(reqPacket); err != nil {
-			log.Fatal(err)
+			stderr.Fatal(err)
 		}
 
 		func() {
@@ -164,11 +167,11 @@ func main() {
 					ecp, _ := packet.Layer(eoe.LayerTypeECP).(*eoe.ECP)
 					if d1q.VLANIdentifier == opts.VlanID && ecp.ExtendedID == opts.EoEEID && ecp.MessageID == messageID && ecp.Sequence == seq {
 						rtt := float64(time.Since(start).Nanoseconds()) / 1000000
-						log.Printf(" %d bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", len(packet.Data()), eth.SrcMAC.String(), ecp.Sequence, ecp.TimeToLive, rtt)
+						stdout.Printf(" %d bytes from %s : eoe_seq=%d ttl=%d time=%.3f ms\n", len(packet.Data()), eth.SrcMAC.String(), ecp.Sequence, ecp.TimeToLive, rtt)
 						return
 					}
 				case <-time.After(time.Duration(opts.Timeout) * time.Second):
-					log.Printf(" ERROR: Request timed out.\n")
+					stderr.Printf(" ERROR: Request timed out.\n")
 					return
 				}
 			}
