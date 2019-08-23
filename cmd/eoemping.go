@@ -178,7 +178,6 @@ func main() {
 		stderr.Fatal(err)
 	}
 	//defer handle.Close()
-	//defer os.Exit(0)
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
@@ -186,7 +185,6 @@ func main() {
 
 	ecpEchoReplies := ecpEchoReplyPackets(ctx, handle, srcMAC)
 	for vlanID, nodes := range vlanToNodes {
-		start := time.Now()
 		time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
 
 		messageID := uint16(rand.Intn(65536))
@@ -197,6 +195,7 @@ func main() {
 		}
 
 		func() {
+            start := time.Now()
 			countOK := 0
 			nodesOK := make([]bool, len(nodes))
 
