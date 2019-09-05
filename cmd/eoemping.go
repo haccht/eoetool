@@ -38,16 +38,17 @@ vlan = [100,101,103]
 */
 
 type options struct {
-	File       string `short:"f" long:"file" description:"Echo request target list file" required:"true"`
-	IFace      string `short:"I" long:"iface" description:"Interface name to send requests" required:"true"`
-	Timeout    int    `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"1"`
-	Interval   int    `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"100"`
-	Length     uint16 `short:"l" long:"length" description:"Frame length (without CRC)" default:"68"`
-	EoEDstMAC  string `long:"eoe-da" description:"EoE destination address" default:"0f:0e:cc:00:00:00"`
-	EoESrcMAC  string `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
-	EoEReplyID string `long:"reply-id" description:"EoE reply address" default:"ff:ff:ff:ff:ff:ff"`
-	EoETTL     uint8  `short:"T" long:"ttl" description:"EoE time to live" default:"25"`
-	EoEEID     uint8  `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
+	File       string   `short:"f" long:"file" description:"Echo request target list file" required:"true"`
+	IFace      string   `short:"I" long:"iface" description:"Interface name to send requests" required:"true"`
+	Timeout    int      `short:"t" long:"timeout" description:"Time in sec to wait for response" default:"1"`
+	Interval   int      `short:"i" long:"interval" description:"Time in msec to wait for next request" default:"100"`
+	Length     uint16   `short:"l" long:"length" description:"Frame length (without CRC)" default:"68"`
+	VlanIDs    []uint16 `short:"v" long:"vid" description:"VLAN ID to send requests"`
+	EoEDstMAC  string   `long:"eoe-da" description:"EoE destination address" default:"0f:0e:cc:00:00:00"`
+	EoESrcMAC  string   `long:"eoe-sa" description:"EoE source address" default:"0e:30:00:00:00:00"`
+	EoEReplyID string   `long:"reply-id" description:"EoE reply address" default:"ff:ff:ff:ff:ff:ff"`
+	EoETTL     uint8    `short:"T" long:"ttl" description:"EoE time to live" default:"25"`
+	EoEEID     uint8    `short:"d" long:"domain" description:"EoE domain ID" default:"0"`
 }
 
 type Config struct {
@@ -131,6 +132,15 @@ func ecpEchoReplyPackets(ctx context.Context, handle *pcap.Handle, srcMAC net.Ha
 	return ecpEchoReplies
 }
 
+func vlanContains(vlanIDs []uint16, vlanID uint16) bool {
+	for _, v := range vlanIDs {
+		if v == vlanID {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	opts := &options{}
 	stdout := log.New(os.Stdout, "", 0)
@@ -149,8 +159,14 @@ func main() {
 	vlanToNodes := make(map[uint16][]NodeConfig)
 	for _, node := range c.Node {
 		for _, vlanID := range node.Vlan {
-			nodes := vlanToNodes[vlanID]
-			vlanToNodes[vlanID] = append(nodes, node)
+			if vlanID > 0xFFF {
+				continue
+			}
+
+			if len(opts.VlanIDs) == 0 || vlanContains(opts.VlanIDs, vlanID) {
+				nodes := vlanToNodes[vlanID]
+				vlanToNodes[vlanID] = append(nodes, node)
+			}
 		}
 	}
 
@@ -195,7 +211,7 @@ func main() {
 		}
 
 		func() {
-            start := time.Now()
+			start := time.Now()
 			countOK := 0
 			nodesOK := make([]bool, len(nodes))
 
