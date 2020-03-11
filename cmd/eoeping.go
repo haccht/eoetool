@@ -12,7 +12,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
-	"github.com/haccht/eoetool"
+	eoe "github.com/haccht/eoetool"
 
 	flags "github.com/jessevdk/go-flags"
 )
@@ -158,7 +158,7 @@ func main() {
 		}
 
 		func() {
-            start := time.Now()
+			start := time.Now()
 
 			for {
 				select {
@@ -172,7 +172,7 @@ func main() {
 						return
 					}
 				case <-time.After(time.Duration(opts.Timeout) * time.Second):
-					stderr.Printf(" ERROR: Request timed out.\n")
+					stderr.Printf("ERROR: Request timed out.\n")
 					return
 				}
 			}
